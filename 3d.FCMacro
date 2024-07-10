@@ -1,0 +1,195 @@
+import FreeCAD
+import FreeCADGui
+from PySide import QtGui, QtCore
+import Part
+import sqlite3
+import datetime
+import os
+
+class StackingToyDialog(QtGui.QDialog):
+    def __init__(self, parent=None):
+        super(StackingToyDialog, self).__init__(parent)
+        self.setWindowTitle("Create Stacking Toy")
+
+        # Shape selection
+        self.shape_label = QtGui.QLabel("Select Shape:")
+        self.shape_combo = QtGui.QComboBox()
+        self.shape_combo.addItems(["Pyramid", "Cone"])
+
+        # Number of rings
+        self.rings_label = QtGui.QLabel("Number of Rings (1-7):")
+        self.rings_spinbox = QtGui.QSpinBox()
+        self.rings_spinbox.setRange(1, 7)
+
+        # Color order (using a QListWidget)
+        self.colors_label = QtGui.QLabel("Select Color Order:")
+        self.colors_list = QtGui.QListWidget()
+        self.colors_list.setSelectionMode(QtGui.QAbstractItemView.MultiSelection)
+        colors = ["Red", "Orange", "Yellow", "Green", "Blue", "Indigo", "Violet"]
+        for color in colors:
+            item = QtGui.QListWidgetItem(color)
+            self.colors_list.addItem(item)
+
+        # Angle selection
+        self.angle_label = QtGui.QLabel("Pyramid Angle (10-50 degrees):")
+        self.angle_spinbox = QtGui.QSpinBox()
+        self.angle_spinbox.setRange(10, 50)
+        self.angle_spinbox.setValue(20)  # Default angle
+
+        # Create button
+        self.create_button = QtGui.QPushButton("Create")
+        self.create_button.clicked.connect(self.create_stacking_toy)
+
+        # View stored data button
+        self.view_button = QtGui.QPushButton("View Stored Data")
+        self.view_button.clicked.connect(self.view_stored_data)
+
+        # Layout
+        layout = QtGui.QVBoxLayout()
+        layout.addWidget(self.shape_label)
+        layout.addWidget(self.shape_combo)
+        layout.addWidget(self.rings_label)
+        layout.addWidget(self.rings_spinbox)
+        layout.addWidget(self.colors_label)
+        layout.addWidget(self.colors_list)
+        layout.addWidget(self.angle_label)
+        layout.addWidget(self.angle_spinbox)
+        layout.addWidget(self.create_button)
+        layout.addWidget(self.view_button)
+        self.setLayout(layout)
+
+    def create_stacking_toy(self):
+        shape = self.shape_combo.currentText()
+        num_rings = self.rings_spinbox.value()
+        selected_items = self.colors_list.selectedItems()
+        colors = [item.text() for item in selected_items]
+        angle = self.angle_spinbox.value()
+
+        if len(colors) < num_rings:
+            QtGui.QMessageBox.warning(self, "Warning", "Please select at least {} colors.".format(num_rings))
+            return
+
+        create_stacking_toy(shape, num_rings, colors, angle)
+        save_to_database(shape, num_rings, colors, angle)
+        self.accept()
+
+    def view_stored_data(self):
+        conn = sqlite3.connect(db_file_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM StackingToy")
+        rows = cursor.fetchall()
+        conn.close()
+
+        dialog = QtGui.QDialog(self)
+        dialog.setWindowTitle("Stored Stacking Toys")
+        layout = QtGui.QVBoxLayout()
+
+        for row in rows:
+            label = QtGui.QLabel("ID: {}, Shape: {}, Rings: {}, Colors: {}, Angle: {}, Date: {}".format(row[0], row[1], row[2], row[3], row[4], row[5]))
+            layout.addWidget(label)
+
+        dialog.setLayout(layout)
+        dialog.exec_()
+
+def create_stacking_toy(shape, num_rings, colors, angle):
+    base_radius = 12
+    base_height = 3
+    initial_ring_radius = 9
+    ring_height = 4
+    small_base_radius = 6
+    small_base_height = 2
+    knob_radius = 4
+    knob_height = 8
+    hole_radius = 1
+    hole_depth = 2
+
+    color_dict = {
+        "Red": (1.0, 0.0, 0.0),
+        "Orange": (1.0, 0.5, 0.0),
+        "Yellow": (1.0, 1.0, 0.0),
+        "Green": (0.0, 1.0, 0.0),
+        "Blue": (0.0, 0.0, 1.0),
+        "Indigo": (0.3, 0.0, 0.5),
+        "Violet": (0.5, 0.0, 0.5),
+    }
+
+    doc = FreeCAD.newDocument("StackingToy")
+
+    base = Part.makeCylinder(base_radius, base_height)
+    base_obj = doc.addObject("Part::Feature", "Base")
+    base_obj.Shape = base
+    base_obj.Placement.Base = FreeCAD.Vector(0, 0, 0)
+    base_obj.ViewObject.ShapeColor = (0.6, 0.3, 0.1)
+
+    for i in range(num_rings):
+        ring_radius = initial_ring_radius - i
+        ring_height = 4
+
+        if shape == "Pyramid":
+            height = ring_radius / (angle * 0.0174533)
+            ring = Part.makeCone(ring_radius, 0, height)
+        elif shape == "Cone":
+            ring = Part.makeCone(ring_radius, ring_radius - 1, ring_height)
+        else:
+            ring = Part.makeCylinder(ring_radius, ring_height)
+
+        ring_vector = FreeCAD.Vector(0, 0, base_height + i * ring_height)
+        ring.translate(ring_vector)
+
+        ring_obj = doc.addObject("Part::Feature", "Ring_{}".format(i + 1))
+        ring_obj.Shape = ring
+
+        color = color_dict.get(colors[i % len(colors)], (1.0, 1.0, 1.0))
+        ring_obj.ViewObject.ShapeColor = color
+
+    small_base = Part.makeCylinder(small_base_radius, small_base_height)
+    small_base_vector = FreeCAD.Vector(0, 0, base_height + num_rings * ring_height)
+    small_base.translate(small_base_vector)
+
+    small_base_obj = doc.addObject("Part::Feature", "SmallBase")
+    small_base_obj.Shape = small_base
+    small_base_obj.ViewObject.ShapeColor = (0.7, 0.7, 0.7)
+
+    knob = Part.makeCylinder(knob_radius, knob_height)
+    knob_vector = FreeCAD.Vector(0, 0, base_height + num_rings * ring_height + small_base_height)
+    knob.translate(knob_vector)
+
+    knob_top = Part.makeSphere(knob_radius)
+    knob_top_vector = FreeCAD.Vector(0, 0, base_height + num_rings * ring_height + small_base_height + knob_height)
+    knob_top.translate(knob_top_vector)
+    knob_final = knob.fuse(knob_top)
+
+    hole = Part.makeCylinder(hole_radius, hole_depth)
+    hole_vector = FreeCAD.Vector(knob_radius, 0, base_height + num_rings * ring_height + small_base_height + knob_height / 2)
+    hole.translate(hole_vector)
+
+    knob_final = knob_final.cut(hole)
+
+    knob_obj = doc.addObject("Part::Feature", "Knob")
+    knob_obj.Shape = knob_final
+    knob_obj.ViewObject.ShapeColor = (0.6, 0.5, 0.4)
+
+    FreeCADGui.ActiveDocument.ActiveView.viewIsometric()
+    FreeCADGui.ActiveDocument.ActiveView.fitAll()
+
+def save_to_database(shape, num_rings, colors, angle):
+    conn = sqlite3.connect(db_file_path)
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS StackingToy
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, shape TEXT, rings INTEGER, colors TEXT, angle INTEGER, created_at TEXT)''')
+    created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("INSERT INTO StackingToy (shape, rings, colors, angle, created_at) VALUES (?, ?, ?, ?, ?)",
+                   (shape, num_rings, ','.join(colors), angle, created_at))
+    conn.commit()
+    conn.close()
+
+# Define database file path in the user's home directory
+home_dir = os.path.expanduser("~")
+db_file_path = os.path.join(home_dir, 'stacking_toy.db')
+
+app = QtGui.QApplication.instance()
+if not app:
+    app = QtGui.QApplication([])
+
+dialog = StackingToyDialog()
+dialog.exec_()
